@@ -1,5 +1,9 @@
-# Published notes
+# Swifty Apple
 
-Finished notes from a private iOS learning system. Only this folder is public.
+Going from high level into the deep.
+These articles are my knowledge ledger I'm going to get back periodically to.
+Usefull for interview preps and knowledge refresher.
 
-Each note states facts about one topic, with sources (Apple docs, WWDC, Swift Evolution).
+Table of Contents:
+
+- [Swift Memory Fundamentals](<Swift Memory Fundamentals/README.md>)
