@@ -16,6 +16,51 @@ Reference counts shared between threads need **atomic updates**: other threads m
 
 Moving a stack pointer is usually cheap. Finding heap space needs more work. Updating the same reference count repeatedly from several CPU cores can add more cost because the cores must take turns writing it. Actual costs depend on the operation.
 
+Pseudocode for the three costs:
+
+```
+// Stack: reserve and release by moving one pointer.
+call parse():
+    stack_pointer -= frame_size      // one subtraction; frame_size known at compile time
+    ... run the function ...
+    stack_pointer += frame_size      // one addition; the space is released
+
+// Heap: the allocator searches for a block.
+let a = Feed():
+    lock the allocator (if another thread is allocating)
+    block = free_list.find(size: 48) // walk the lists for a block that fits
+    unlock
+    return address of block
+
+// Shared reference count: cores take turns on one memory location.
+// Thread 1               // Thread 2
+retain(a)                 retain(a)
+  // atomic rc += 1         // atomic rc += 1 — must wait until
+  //                        // thread 1's write is visible, then write
+```
+
+The drawing and the step table below follow this code. The snapshot is taken on the last line of `parse`, after `let b = a`:
+
+```swift
+class Feed {
+    // stored properties
+}
+
+func main() {
+    load()
+}
+
+func load() {
+    let a = Feed()   // heap allocation; a lives in load's frame
+    parse(a)
+}
+
+func parse(_ a: Feed) {
+    let n = 42       // Int, the value is inline in parse's frame
+    let b = a        // retain: rc 1 → 2
+}                    // return: b is released (rc 2 → 1), the frame is gone
+```
+
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "16px"}}}%%
 block-beta
@@ -80,9 +125,11 @@ struct Point {
     var y: Double
 }
 
-let p = Point(x: 1, y: 2)
-var q = p
-q.x = 9                         // p.x is still 1
+func f() {
+    let p = Point(x: 1, y: 2)
+    var q = p
+    q.x = 9                     // p.x is still 1
+}
 ```
 
 `Point` occupies 16 bytes in this example. It is stored inline wherever the variable lives:
@@ -135,21 +182,24 @@ Here `p` and `q` each have their own 16 bytes. Assignment copies the bytes; it c
 A class variable holds a pointer to an object. On a 64-bit device, that pointer is 8 bytes. The object normally lives on the heap.
 
 ```swift
+struct Item {}
+
 final class Feed {
-    var count = 0
+    var token: NSObjectProtocol?
+    var items: [Item] = []
 }
 
 let a = Feed()                  // create an object
 let b = a                       // copy its address; keep the same object alive
-b.count = 9
-print(a.count)                  // 9
+b.items.append(Item())
+print(a.items.count)            // 1
 ```
 
 `a` and `b` refer to the same object. Assignment copies its address and, when needed, retains the object. It does not copy the stored properties.
 
 A native Swift class object begins with a pointer to its type information and a reference-count field. Its stored properties come after those two fields. The type information helps Swift choose which method implementation to call while the program runs (**dynamic dispatch**). It also supports `type(of:)`.
 
-The following drawing uses a `Feed` with `token` and `items` properties. The array header is inside the object; its elements live in a separate buffer.
+The drawing shows the `Feed` object's `token` and `items` properties after the two header fields. The array header is inside the object; its elements live in a separate buffer.
 
 ```mermaid
 %%{init: {"themeVariables": {"fontSize": "16px"}}}%%
@@ -484,7 +534,7 @@ func showNumber() {
 showNumber()                       // 3
 ```
 
-**Escaping capture.** A returned closure can run after the method that created it returns. This example extends the `Feed` class declared in section 2, which has a `count` property:
+**Escaping capture.** A returned closure can run after the method that created it returns. This example extends the `Feed` class declared in section 2, which has an `items` property:
 
 ```swift
 extension Feed {
@@ -492,8 +542,8 @@ extension Feed {
         var n = 0
         return {
             n += 1                 // captured variable survives makeUpdater()
-            self.count = n         // captured self keeps this Feed alive
-            return self.count
+            self.items.append(Item())  // captured self keeps this Feed alive
+            return n
         }
     }
 }
@@ -502,7 +552,7 @@ let feed = Feed()
 let update = feed.makeUpdater()
 print(update())                    // 1
 print(update())                    // 2
-print(feed.count)                  // 2
+print(feed.items.count)            // 2
 ```
 
 The returned closure keeps access to both `n` and `self`. Its captured data can use heap storage so it remains available after `makeUpdater()` returns. The drawing below shows these three cases; the compiler may store the captured variable in a separate shared box rather than directly inside the closure context.
@@ -572,7 +622,7 @@ On disk, the closure's machine code is in the executable or a library. When the 
 
 The text segment is separate from the stack and heap. In the drawing, “binary” means this loaded code. The function pointer stores the address of the code to run.
 
-Functions, methods, initializers, deinitializers, property getters and setters, and compiler-generated helpers also store their instructions in this code memory. Their data is stored separately. For example, `Feed.makeUpdater()` has its instructions in the text segment, while `feed.count` is stored inside the heap object.
+Functions, methods, initializers, deinitializers, property getters and setters, and compiler-generated helpers also store their instructions in this code memory. Their data is stored separately. For example, `Feed.makeUpdater()` has its instructions in the text segment, while `feed.items` is stored inside the heap object.
 
 ### What exactly is captured?
 
